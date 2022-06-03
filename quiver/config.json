@@ -1,0 +1,24 @@
+{
+    "SAGE": {
+        "hidden_channels": 256,
+        "num_layers": 3 
+    },
+    "TRAIN_LOADER": {
+        "sample_sizes": [15, 10, 5],
+        "batch_size": 1024,
+        "num_workers": 8
+    },
+    "SUBGRAPH_LOADER": {
+        "sample_sizes": [-1],
+        "batch_size": 4096,
+        "num_workers": 8
+    },
+    "ADAM": {
+        "lr": 0.003
+    },
+    "RUN": {
+        "runs": 10,
+        "epochs": 20,
+        "test_after": 5
+    }
+}

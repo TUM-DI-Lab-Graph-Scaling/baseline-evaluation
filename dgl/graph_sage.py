@@ -11,6 +11,7 @@ class GraphSAGE(nn.Module):
         super(GraphSAGE, self).__init__()
         self.layers = nn.ModuleList()
         self.layers.append(SAGEConv(in_feats, h_feats, aggregator_type="mean"))
+        self.layers.append(SAGEConv(h_feats, h_feats, aggregator_type="mean"))
         self.layers.append(SAGEConv(h_feats, num_classes, aggregator_type="mean"))
         self.h_feats = h_feats
 
@@ -43,7 +44,6 @@ class GraphSAGE(nn.Module):
                 h = layer(blocks[0], x)
                 if l != len(self.layers) - 1:
                     h = F.relu(h)
-                    h = self.dropout(h)
                 y[output_nodes[0]:output_nodes[-1] + 1] = h.to(buffer_device)
             feat = y
         return y

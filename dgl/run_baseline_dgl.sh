@@ -8,4 +8,4 @@ export CUDA_HOME=/usr/local/cuda-11.3
 export CUDA_VISIBLE_DEVICES=3,4,5,6
 
 # Launch trainings script
-python train.py --dataset ognb-products --model GraphSAGE --gpus 4
+python train.py --dataset ogbn-products --model GraphSAGE --gpus 4

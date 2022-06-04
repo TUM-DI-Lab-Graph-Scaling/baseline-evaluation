@@ -9,8 +9,8 @@ import tqdm
 from dgl import DGLError
 from ogb.nodeproppred import DglNodePropPredDataset
 
-from dgl.gat import GAT
-from dgl.graph_sage import GraphSAGE
+from graph_sage import GraphSAGE
+from gat import GAT
 
 
 def run(proc_id, devices, args):
@@ -47,15 +47,9 @@ def run(proc_id, devices, args):
     valid_nids = idx_split['valid']
     test_nids = idx_split['test']
 
-    sampler = dgl.dataloading.NeighborSampler([4, 4])
-    train_dataloader = dgl.dataloading.DataLoader(graph, train_nids, sampler, device=device, use_ddp=True,
-                                                  batch_size=1024, shuffle=True, drop_last=False, num_workers=0)
-    valid_dataloader = dgl.dataloading.DataLoader(graph, valid_nids, sampler, device=device, use_ddp=False,
-                                                  batch_size=1024, shuffle=False, drop_last=False, num_workers=0)
-
     global model
     if args.model == "GraphSAGE":
-        model = GraphSAGE(num_features, 128, num_classes).to(device)
+        model = GraphSAGE(num_features, 256, num_classes).to(device)
     elif args.model == "GAT":
         heads = ([8] * (args.num_layers - 1)) + [1]
         model = GAT(graph, 2, num_features, 8, num_classes, heads, .6, .6, 0.2, False)
@@ -65,11 +59,17 @@ def run(proc_id, devices, args):
     else:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], output_device=device)
 
+    sampler = dgl.dataloading.NeighborSampler([15, 10])
+    train_dataloader = dgl.dataloading.DataLoader(graph, train_nids, sampler, device=device, use_ddp=True,
+                                                  batch_size=1024, shuffle=True, drop_last=False, num_workers=0)
+    valid_dataloader = dgl.dataloading.DataLoader(graph, valid_nids, sampler, device=device, use_ddp=False,
+                                                  batch_size=1024, shuffle=False, drop_last=False, num_workers=0)
+
     opt = torch.optim.Adam(model.parameters())
 
     best_accuracy = 0
 
-    for epoch in range(10):
+    for epoch in range(20):
         model.train()
 
         with tqdm.tqdm(train_dataloader) as tq:
@@ -84,7 +84,8 @@ def run(proc_id, devices, args):
                 loss.backward()
                 opt.step()
 
-                accuracy = sklearn.metrics.accuracy_score(labels.cpu().numpy(), predictions.argmax(1).detach().cpu().numpy())
+                accuracy = sklearn.metrics.accuracy_score(labels.cpu().numpy(),
+                                                          predictions.argmax(1).detach().cpu().numpy())
 
                 tq.set_postfix({'loss': '%.03f' % loss.item(), 'acc': '%.03f' % accuracy}, refresh=False)
 
@@ -105,7 +106,7 @@ def run(proc_id, devices, args):
                 if best_accuracy < accuracy:
                     best_accuracy = accuracy
 
-        break
+    print(f"Best accuracy: {best_accuracy}")
 
 
 def main():

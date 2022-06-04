@@ -1,4 +1,5 @@
 import argparse
+import time
 
 import dgl
 import torch
@@ -73,6 +74,7 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
 
     for epoch in range(20):
         model.train()
+        start = time.time()
 
         for it, (input_nodes, output_nodes, blocks) in enumerate(train_dataloader):
             inputs = blocks[0].srcdata['feat']
@@ -88,8 +90,10 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
             if it % 20:
                 accuracy = MF.accuracy(predictions, labels)
                 mem = torch.cuda.max_memory_allocated() / 1000000
-                print('GPU', proc_id, 'Loss', loss.item(), 'Acc', accuracy.item(), 'GPU Mem', mem, 'MB')
+                print(f"GPU {proc_id}: Loss {loss.item()} Accuracy {accuracy.item()} GPU Memory {mem} MB")
 
+        end = time.time()
+        print(f"Epoch time: {start - end}")
         model.eval()
 
         if proc_id == 0:
@@ -102,11 +106,10 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
             predictions = torch.cat(predictions)
             labels = torch.cat(labels)
             accuracy = MF.accuracy(predictions, labels)
-            print('Epoch {} Validation Accuracy {}'.format(epoch, accuracy))
+            print(f"Epoch {epoch} Validation Accuracy: {accuracy}")
             if best_accuracy < accuracy:
                 best_accuracy = accuracy
-
-    print(f"Best accuracy: {best_accuracy}")
+            print(f"Best Validation Accuracy: {best_accuracy}")
 
 
 def main():

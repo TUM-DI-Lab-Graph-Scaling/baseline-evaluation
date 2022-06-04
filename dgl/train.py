@@ -100,8 +100,9 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
 
             end = time.time()
             epoch_time = end - start
-            print(f"Epoch time: {epoch_time}")
+            print(f"GPU {proc_id} Epoch {epoch} time: {epoch_time}")
             metrics_writer.writerow([proc_id, epoch, epoch_time])
+            csv_file.flush()
 
             model.eval()
 

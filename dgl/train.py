@@ -97,8 +97,8 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
             labels = []
             for it, (input_nodes, output_nodes, blocks) in enumerate(valid_dataloader):
                 inputs = blocks[0].srcdata['feat']
-                labels.append(blocks[-1].dstdata['label'].cpu().numpy())
-                predictions.append(model(blocks, inputs).argmax(1).cpu().numpy())
+                labels.append(blocks[-1].dstdata['label'])
+                predictions.append(model(blocks, inputs).argmax(1))
             predictions = torch.cat(predictions)
             labels = torch.cat(labels)
             accuracy = MF.accuracy(predictions, labels)

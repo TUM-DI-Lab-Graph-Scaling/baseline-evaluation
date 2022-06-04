@@ -1,5 +1,9 @@
 import argparse
+import csv
+import datetime
+import os
 import time
+from pathlib import Path
 
 import dgl
 import torch
@@ -37,7 +41,7 @@ def download_dataset(dataset_name):
     return graph, num_features, num_classes, train_nids, valid_nids, test_nids
 
 
-def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_nids, test_nids, args):
+def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_nids, test_nids, metrics_file, args):
     dev_id = devices[proc_id]
     dist_init_method = 'tcp://{master_ip}:{master_port}'.format(master_ip='127.0.0.1', master_port='12345')
     if torch.cuda.device_count() < 1:
@@ -72,44 +76,50 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
 
     best_accuracy = 0
 
-    for epoch in range(20):
-        model.train()
-        start = time.time()
+    with open(metrics_file, 'a') as csv_file:
+        metrics_writer = csv.writer(csv_file, delimiter=',')
+        for epoch in range(20):
+            model.train()
+            start = time.time()
 
-        for it, (input_nodes, output_nodes, blocks) in enumerate(train_dataloader):
-            inputs = blocks[0].srcdata['feat']
-            labels = blocks[-1].dstdata['label']
-
-            predictions = model(blocks, inputs)
-            loss = F.cross_entropy(predictions, labels)
-
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-
-            if it % 20:
-                accuracy = MF.accuracy(predictions, labels)
-                mem = torch.cuda.max_memory_allocated() / 1000000
-                print(f"GPU {proc_id}: Loss {loss.item()} Accuracy {accuracy.item()} GPU Memory {mem} MB")
-
-        end = time.time()
-        print(f"Epoch time: {start - end}")
-        model.eval()
-
-        if proc_id == 0:
-            predictions = []
-            labels = []
-            for it, (input_nodes, output_nodes, blocks) in enumerate(valid_dataloader):
+            for it, (input_nodes, output_nodes, blocks) in enumerate(train_dataloader):
                 inputs = blocks[0].srcdata['feat']
-                labels.append(blocks[-1].dstdata['label'])
-                predictions.append(model(blocks, inputs).argmax(1))
-            predictions = torch.cat(predictions)
-            labels = torch.cat(labels)
-            accuracy = MF.accuracy(predictions, labels)
-            print(f"Epoch {epoch} Validation Accuracy: {accuracy}")
-            if best_accuracy < accuracy:
-                best_accuracy = accuracy
-            print(f"Best Validation Accuracy: {best_accuracy}")
+                labels = blocks[-1].dstdata['label']
+
+                predictions = model(blocks, inputs)
+                loss = F.cross_entropy(predictions, labels)
+
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+
+                if it % 20:
+                    accuracy = MF.accuracy(predictions, labels)
+                    mem = torch.cuda.max_memory_allocated() / 1000000
+                    print(f"GPU {proc_id}: Loss {loss.item()} Accuracy {accuracy.item()} GPU Memory {mem} MB")
+
+            end = time.time()
+            epoch_time = end - start
+            print(f"GPU {proc_id} Epoch {epoch} time: {epoch_time}")
+            metrics_writer.writerow([proc_id, epoch, epoch_time])
+            csv_file.flush()
+
+            model.eval()
+
+            if proc_id == 0:
+                predictions = []
+                labels = []
+                for it, (input_nodes, output_nodes, blocks) in enumerate(valid_dataloader):
+                    inputs = blocks[0].srcdata['feat']
+                    labels.append(blocks[-1].dstdata['label'])
+                    predictions.append(model(blocks, inputs).argmax(1))
+                predictions = torch.cat(predictions)
+                labels = torch.cat(labels)
+                accuracy = MF.accuracy(predictions, labels)
+                print(f"Epoch {epoch} Validation Accuracy: {accuracy}")
+                if best_accuracy < accuracy:
+                    best_accuracy = accuracy
+                print(f"Best Validation Accuracy: {best_accuracy}")
 
 
 def main():
@@ -121,10 +131,16 @@ def main():
 
     graph, num_features, num_classes, train_nids, valid_nids, test_nids = download_dataset(args.dataset)
 
+    timestamp = int(datetime.datetime.now().timestamp())
+    metrics_path = f"metrics/dgl/{args.dataset}/{args.model}/{args.gpus}"
+    Path(metrics_path).mkdir(parents=True, exist_ok=True)
+    metrics_file = f"{metrics_path}/{timestamp}.csv"
+    os.mknod(metrics_file)
+
     num_gpus = args.gpus
     import torch.multiprocessing as mp
     mp.spawn(run, args=(list(range(num_gpus)), graph, num_features, num_classes, train_nids, valid_nids, test_nids,
-                        args), nprocs=num_gpus)
+                        metrics_file, args), nprocs=num_gpus)
 
 
 if __name__ == "__main__":

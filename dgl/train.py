@@ -13,26 +13,14 @@ from graph_sage import GraphSAGE
 from gat import GAT
 
 
-def run(proc_id, devices, args):
-    dev_id = devices[proc_id]
-    dist_init_method = 'tcp://{master_ip}:{master_port}'.format(master_ip='127.0.0.1', master_port='12345')
-    if torch.cuda.device_count() < 1:
-        device = torch.device('cpu')
-        torch.distributed.init_process_group(
-            backend='gloo', init_method=dist_init_method, world_size=len(devices), rank=proc_id)
-    else:
-        torch.cuda.set_device(dev_id)
-        device = torch.device('cuda:' + str(dev_id))
-        torch.distributed.init_process_group(
-            backend='nccl', init_method=dist_init_method, world_size=len(devices), rank=proc_id)
-
+def download_dataset(dataset_name):
     global dataset
-    if args.dataset == "ogbn-products":
+    if dataset_name == "ogbn-products":
         dataset = DglNodePropPredDataset(name="ogbn-products")
-    elif args.dataset == "ogbn-papers100M":
+    elif dataset_name == "ogbn-papers100M":
         dataset = DglNodePropPredDataset(name="ogbn-papers100M")
     else:
-        DGLError(f"Dataset {args.dataset} not supported.")
+        DGLError(f"Dataset {dataset_name} not supported.")
 
     graph, node_labels = dataset[0]
     graph = dgl.add_reverse_edges(graph)
@@ -46,6 +34,22 @@ def run(proc_id, devices, args):
     train_nids = idx_split['train']
     valid_nids = idx_split['valid']
     test_nids = idx_split['test']
+
+    return graph, num_features, num_classes, train_nids, valid_nids, test_nids
+
+
+def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_nids, test_nids, args):
+    dev_id = devices[proc_id]
+    dist_init_method = 'tcp://{master_ip}:{master_port}'.format(master_ip='127.0.0.1', master_port='12345')
+    if torch.cuda.device_count() < 1:
+        device = torch.device('cpu')
+        torch.distributed.init_process_group(
+            backend='gloo', init_method=dist_init_method, world_size=len(devices), rank=proc_id)
+    else:
+        torch.cuda.set_device(dev_id)
+        device = torch.device('cuda:' + str(dev_id))
+        torch.distributed.init_process_group(
+            backend='nccl', init_method=dist_init_method, world_size=len(devices), rank=proc_id)
 
     global model
     if args.model == "GraphSAGE":
@@ -116,9 +120,12 @@ def main():
     parser.add_argument("--gpus", type=int, default=4)
     args = parser.parse_args()
 
+    graph, num_features, num_classes, train_nids, valid_nids, test_nids = download_dataset(args.dataset)
+
     num_gpus = args.gpus
     import torch.multiprocessing as mp
-    mp.spawn(run, args=(list(range(num_gpus)), args), nprocs=num_gpus)
+    mp.spawn(run, args=(list(range(num_gpus)), graph, num_features, num_classes, train_nids, valid_nids, test_nids,
+                        args), nprocs=num_gpus)
 
 
 if __name__ == "__main__":

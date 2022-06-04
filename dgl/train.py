@@ -1,16 +1,14 @@
 import argparse
 
 import dgl
-import numpy as np
-import sklearn
 import torch
 import torch.nn.functional as F
-import tqdm
+import torchmetrics.functional as MF
 from dgl import DGLError
 from ogb.nodeproppred import DglNodePropPredDataset
 
-from graph_sage import GraphSAGE
 from gat import GAT
+from graph_sage import GraphSAGE
 
 
 def download_dataset(dataset_name):
@@ -76,39 +74,37 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
     for epoch in range(20):
         model.train()
 
-        with tqdm.tqdm(train_dataloader) as tq:
-            for step, (input_nodes, output_nodes, mfgs) in enumerate(tq):
-                inputs = mfgs[0].srcdata['feat']
-                labels = mfgs[-1].dstdata['label']
+        for it, (input_nodes, output_nodes, blocks) in enumerate(train_dataloader):
+            inputs = blocks[0].srcdata['feat']
+            labels = blocks[-1].dstdata['label']
 
-                predictions = model(mfgs, inputs)
+            predictions = model(blocks, inputs)
+            loss = F.cross_entropy(predictions, labels)
 
-                loss = F.cross_entropy(predictions, labels)
-                opt.zero_grad()
-                loss.backward()
-                opt.step()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
 
-                accuracy = sklearn.metrics.accuracy_score(labels.cpu().numpy(),
-                                                          predictions.argmax(1).detach().cpu().numpy())
-
-                tq.set_postfix({'loss': '%.03f' % loss.item(), 'acc': '%.03f' % accuracy}, refresh=False)
+            if it % 20:
+                accuracy = MF.accuracy(predictions, labels)
+                mem = torch.cuda.max_memory_allocated() / 1000000
+                print('GPU', proc_id, 'Loss', loss.item(), 'Acc', accuracy.item(), 'GPU Mem', mem, 'MB')
 
         model.eval()
 
         if proc_id == 0:
             predictions = []
             labels = []
-            with tqdm.tqdm(valid_dataloader) as tq, torch.no_grad():
-                for input_nodes, output_nodes, mfgs in tq:
-                    inputs = mfgs[0].srcdata['feat']
-                    labels.append(mfgs[-1].dstdata['label'].cpu().numpy())
-                    predictions.append(model(mfgs, inputs).argmax(1).cpu().numpy())
-                predictions = np.concatenate(predictions)
-                labels = np.concatenate(labels)
-                accuracy = sklearn.metrics.accuracy_score(labels, predictions)
-                print('Epoch {} Validation Accuracy {}'.format(epoch, accuracy))
-                if best_accuracy < accuracy:
-                    best_accuracy = accuracy
+            for it, (input_nodes, output_nodes, blocks) in enumerate(valid_dataloader):
+                inputs = blocks[0].srcdata['feat']
+                labels.append(blocks[-1].dstdata['label'].cpu().numpy())
+                predictions.append(model(blocks, inputs).argmax(1).cpu().numpy())
+            predictions = torch.cat(predictions)
+            labels = torch.cat(labels)
+            accuracy = MF.accuracy(predictions, labels)
+            print('Epoch {} Validation Accuracy {}'.format(epoch, accuracy))
+            if best_accuracy < accuracy:
+                best_accuracy = accuracy
 
     print(f"Best accuracy: {best_accuracy}")
 

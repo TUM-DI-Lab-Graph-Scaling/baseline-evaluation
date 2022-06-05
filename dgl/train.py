@@ -43,7 +43,7 @@ def download_dataset(dataset_name):
 
 def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_nids, test_nids, metrics_file, args):
     dev_id = devices[proc_id]
-    graph.pin_memory_()
+
     dist_init_method = 'tcp://{master_ip}:{master_port}'.format(master_ip='127.0.0.1', master_port='12345')
     if torch.cuda.device_count() < 1:
         device = torch.device('cpu')
@@ -54,6 +54,8 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
         device = torch.device('cuda:' + str(dev_id))
         torch.distributed.init_process_group(
             backend='nccl', init_method=dist_init_method, world_size=len(devices), rank=proc_id)
+
+    graph = graph.to(device)
 
     global model
     if args.model == "GraphSAGE":

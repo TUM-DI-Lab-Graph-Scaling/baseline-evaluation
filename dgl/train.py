@@ -55,7 +55,6 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
         torch.distributed.init_process_group(
             backend='nccl', init_method=dist_init_method, world_size=len(devices), rank=proc_id)
 
-    graph = graph.to(device)
     train_nids = train_nids.to(device)
     valid_nids = valid_nids.to(device)
 
@@ -73,9 +72,11 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
 
     sampler = dgl.dataloading.NeighborSampler([15, 10, 5])
     train_dataloader = dgl.dataloading.DataLoader(graph, train_nids, sampler, device=device, use_ddp=True,
-                                                  batch_size=1024, shuffle=True, drop_last=False, num_workers=0)
+                                                  batch_size=1024, shuffle=True, drop_last=False, num_workers=0,
+                                                  use_uva=True)
     valid_dataloader = dgl.dataloading.DataLoader(graph, valid_nids, sampler, device=device, use_ddp=False,
-                                                  batch_size=1024, shuffle=False, drop_last=False, num_workers=0)
+                                                  batch_size=1024, shuffle=False, drop_last=False, num_workers=0,
+                                                  use_uva=True)
 
     opt = torch.optim.Adam(model.parameters())
 

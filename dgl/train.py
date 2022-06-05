@@ -56,6 +56,7 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
             backend='nccl', init_method=dist_init_method, world_size=len(devices), rank=proc_id)
 
     graph = graph.to(device)
+    train_nids = train_nids.to(device)
 
     global model
     if args.model == "GraphSAGE":

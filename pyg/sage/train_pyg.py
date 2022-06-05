@@ -32,7 +32,7 @@ def create_samplers(dataset):
     data = dataset[0]
     train_loader = NeighborSampler(data.edge_index, 
                                    node_idx=split_idx['train'],
-                                   sizes=[15, 10, 5],
+                                   sizes=[15, 10],
                                    batch_size=1024,
                                    shuffle=True,
                                    num_workers=0)
@@ -66,7 +66,7 @@ def run(proc_id, devices, args, dataset, evaluator, train_loader, subgraph_loade
         model = GraphSAGE(dataset.num_features, 
                           256, 
                           dataset.num_classes, 
-                          num_layers=3).to(device)
+                          num_layers=2).to(device)
     elif args.model == 'GAT':
         raise NotImplementedError('GAT has not been implemented yet.')
 

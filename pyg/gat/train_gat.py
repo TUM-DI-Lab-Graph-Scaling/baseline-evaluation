@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from torch_geometric.loader import NeighborSampler
 
-from graph_sage import GraphSAGE
+from gat import GAT
 
 import torch.multiprocessing as mp
 
@@ -32,7 +32,7 @@ def create_samplers(dataset):
     data = dataset[0]
     train_loader = NeighborSampler(data.edge_index, 
                                    node_idx=split_idx['train'],
-                                   sizes=[15, 10, 5],
+                                   sizes=[15, 10],
                                    batch_size=1024,
                                    shuffle=True,
                                    num_workers=0)
@@ -62,19 +62,14 @@ def run(proc_id, devices, args, dataset, evaluator, train_loader, subgraph_loade
     
     # Initialize model
     global model
-    if args.model == 'GraphSAGE':
-        model = GraphSAGE(dataset.num_features, 
-                          256, 
-                          dataset.num_classes, 
-                          num_layers=3).to(device)
-    elif args.model == 'GAT':
-        raise NotImplementedError('GAT has not been implemented yet.')
-
+    
+    model = GAT(dataset.num_features, 128, dataset.num_classes, num_layers=3,
+            heads=4).to(device)
     # Initialize DistributedDataParallel
     if device == torch.device('cpu'):
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=None, output_device=None)
     else:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], output_device=device)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], output_device=device,find_unused_parameters=True)
     
     data = dataset[0]
     split_idx = dataset.get_idx_split()
@@ -114,27 +109,26 @@ def run(proc_id, devices, args, dataset, evaluator, train_loader, subgraph_loade
         acc = total_correct / train_idx.size(0)
         print(f'Epoch {epoch:02d}, Loss: {loss:.4f}, Training Accuracy: {acc:.4f}')
         
-        if proc_id == 0:
-            with torch.no_grad():
-                model.eval()
+        # if proc_id == 0:
+        #     with torch.no_grad():
+        #         model.eval()
 
-                out = model.module.inference(x, subgraph_loader, device)
+        #         out = model.module.inference(x, subgraph_loader, device)
 
-                y_true = y.cpu().unsqueeze(-1)
-                y_pred = out.argmax(dim=-1, keepdim=True)
+        #         y_true = y.cpu().unsqueeze(-1)
+        #         y_pred = out.argmax(dim=-1, keepdim=True)
 
-                val_acc = evaluator.eval({
-                    'y_true': y_true[split_idx['valid']],
-                    'y_pred': y_pred[split_idx['valid']],
-                })['acc']
-            print(f'Validation Accuracy: {val_acc:.4f}')
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
+        #         val_acc = evaluator.eval({
+        #             'y_true': y_true[split_idx['valid']],
+        #             'y_pred': y_pred[split_idx['valid']],
+        #         })['acc']
+        #     print(f'Validation Accuracy: {val_acc:.4f}')
+        #     if val_acc > best_val_acc:
+        #         best_val_acc = val_acc
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='ogbn-products')
-    parser.add_argument('--model', type=str, default='GraphSAGE')
     parser.add_argument('--gpus', type=int, default=1)
     args = parser.parse_args()
 

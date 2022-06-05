@@ -35,12 +35,12 @@ def create_samplers(dataset):
 
     csr_topo = quiver.CSRTopo(data.edge_index)                         # Quiver
     quiver_sampler = quiver.pyg.GraphSageSampler(csr_topo,             # Quiver
-                                                 [15, 10], 
+                                                 [15, 10, 5], 
                                                  0,
                                                  mode='GPU')
     train_loader = NeighborSampler(data.edge_index, 
                                    node_idx=split_idx['train'],
-                                   sizes=[15, 10],
+                                   sizes=[15, 10, 5],
                                    batch_size=1024,
                                    shuffle=True,
                                    num_workers=0)
@@ -74,7 +74,7 @@ def run(proc_id, devices, args, dataset, evaluator, quiver_sampler, train_loader
         model = GraphSAGE(dataset.num_features, 
                           256, 
                           dataset.num_classes, 
-                          num_layers=2).to(device)
+                          num_layers=3).to(device)
     elif args.model == 'GAT':
         raise NotImplementedError('GAT has not been implemented yet.')
 

@@ -1,0 +1,1 @@
+python train_pyg.py --dataset ogbn-products --model GraphSAGE --gpus 4

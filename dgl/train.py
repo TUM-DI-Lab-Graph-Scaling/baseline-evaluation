@@ -57,6 +57,7 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
 
     graph = graph.to(device)
     train_nids = train_nids.to(device)
+    valid_nids = valid_nids.to(device)
 
     global model
     if args.model == "GraphSAGE":

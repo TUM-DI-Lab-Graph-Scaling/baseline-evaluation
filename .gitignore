@@ -3,3 +3,4 @@
 /envs
 /.DS_Store
 /__pycache__
+/dgl/dataset/

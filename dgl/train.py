@@ -70,7 +70,10 @@ def run(proc_id, devices, graph, num_features, num_classes, train_nids, valid_ni
     else:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], output_device=device)
 
-    sampler = dgl.dataloading.NeighborSampler([15, 10, 5], prefetch_node_feats=["feat"], prefetch_labels=["label"])
+    sampler = dgl.dataloading.NeighborSampler([15, 10, 5],
+                                              prefetch_node_feats=["feat"],
+                                              prefetch_labels=["label"],
+                                              output_device=device)
     train_dataloader = dgl.dataloading.DataLoader(graph, train_nids, sampler, device=device, use_ddp=True,
                                                   batch_size=1024, shuffle=True, drop_last=False, num_workers=0,
                                                   use_uva=True)

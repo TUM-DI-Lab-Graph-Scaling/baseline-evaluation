@@ -1,18 +1,16 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-
-from tqdm import tqdm
 
 from torch_geometric.nn import SAGEConv
 
-class GraphSAGE(nn.Module):
+
+class GraphSAGE(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
-        super().__init__()
+        super(GraphSAGE, self).__init__()
 
         self.num_layers = num_layers
 
-        self.convs = nn.ModuleList()
+        self.convs = torch.nn.ModuleList()
         self.convs.append(SAGEConv(in_channels, hidden_channels))
         for _ in range(num_layers - 2):
             self.convs.append(SAGEConv(hidden_channels, hidden_channels))
@@ -23,12 +21,12 @@ class GraphSAGE(nn.Module):
             conv.reset_parameters()
 
     def forward(self, x, adjs):
-        # 'train_loader' computes the k-hop neighborhood of a batch of nodes,
-        # and returns, for each layer, a bipartite graph object, holding the
-        # bipartite edges 'edge_index', the index 'e_id' of the original edges,
-        # and the size/shape 'size' of the bipartite graph.
-        # Target nodes are also included in the source nodes so that one can
-        # easily apply skip-connections or add self-loops.
+        """ 'train_loader' computes the k-hop neighborhood of a batch of nodes,
+        and returns, for each layer, a bipartite graph object, holding the
+        bipartite edges 'edge_index', the index 'e_id' of the original edges,
+        and the size/shape 'size' of the bipartite graph.
+        Target nodes are also included in the source nodes so that one can
+        easily apply skip-connections or add self-loops. """
         for i, (edge_index, _, size) in enumerate(adjs):
             x_target = x[:size[1]]  # Target nodes are always placed first.
             x = self.convs[i]((x, x_target), edge_index)
@@ -36,13 +34,10 @@ class GraphSAGE(nn.Module):
                 x = F.relu(x)
         return x.log_softmax(dim=-1)
 
-    def inference(self, x_all, subgraph_loader, device):
-        pbar = tqdm(total=x_all.size(0) * self.num_layers)
-        pbar.set_description('Evaluating')
-
-        # Compute representations of nodes layer by layer, using *all*
-        # available edges. This leads to faster computation in contrast to
-        # immediately computing the final representations of each batch.
+    def inference(self, x_all, device, subgraph_loader):
+        """ Compute representations of nodes layer by layer, using *all*
+        available edges. This leads to faster computation in contrast to
+        immediately computing the final representations of each batch. """
         total_edges = 0
         for i in range(self.num_layers):
             xs = []
@@ -55,11 +50,5 @@ class GraphSAGE(nn.Module):
                 if i != self.num_layers - 1:
                     x = F.relu(x)
                 xs.append(x.cpu())
-
-                pbar.update(batch_size)
-
             x_all = torch.cat(xs, dim=0)
-
-        pbar.close()
-
         return x_all

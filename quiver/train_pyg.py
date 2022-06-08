@@ -1,149 +1,128 @@
 import argparse
+import csv
+import datetime
 import os
+import time
+from pathlib import Path
+
+from ogb.nodeproppred import PygNodePropPredDataset, Evaluator
 
 import torch
 import torch.nn.functional as F
-from ogb.nodeproppred import Evaluator, PygNodePropPredDataset
-from tqdm import tqdm
+import torch.multiprocessing as mp
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
 
+from torch_geometric.nn import SAGEConv
 from torch_geometric.loader import NeighborSampler
 
 from graph_sage import GraphSAGE
 
-import torch.multiprocessing as mp
 
-
-def download_dataset(dataset_name):
-    if dataset_name == 'ogbn-products':
-        root = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'data', 'products')
-        dataset = PygNodePropPredDataset('ogbn-products', root)
-        evaluator = Evaluator(name='ogbn-products')
-    elif dataset_name == 'ogbn-papers100M':
-        root = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'data', 'papers100M')
-        dataset = PygNodePropPredDataset('ogbn-papers100M', root)
-        evaluator = Evaluator(name='ogbn-papers100M')
-    else:
-        raise NotImplementedError(f'Dataset {dataset_name} not supported.')
-    return dataset, evaluator
-
-
-def create_samplers(dataset):
-    split_idx = dataset.get_idx_split()
-    data = dataset[0]
-    train_loader = NeighborSampler(data.edge_index, 
-                                   node_idx=split_idx['train'],
-                                   sizes=[15, 10, 5],
-                                   batch_size=1024,
-                                   shuffle=True,
-                                   num_workers=0)
-    subgraph_loader = NeighborSampler(data.edge_index,
-                                    node_idx=None,
-                                    sizes=[-1],
-                                    batch_size=1024,
-                                    shuffle=False,
-                                    num_workers=0)
-    return train_loader, subgraph_loader
-
-
-def run(proc_id, devices, args, dataset, evaluator, train_loader, subgraph_loader):
-
-    # Initialize process
-    dev_id = devices[proc_id]
-    dist_init_method = 'tcp://{master_ip}:{master_port}'.format(master_ip='127.0.0.1', master_port='12345')
-    if torch.cuda.device_count() < 1:
-        device = torch.device('cpu')
-        torch.distributed.init_process_group(
-            backend='gloo', init_method=dist_init_method, world_size=len(devices), rank=proc_id)
-    else:
-        torch.cuda.set_device(dev_id)
-        device = torch.device('cuda:' + str(dev_id))
-        torch.distributed.init_process_group(
-            backend='nccl', init_method=dist_init_method, world_size=len(devices), rank=proc_id)
-    
-    # Initialize model
-    global model
-    if args.model == 'GraphSAGE':
-        model = GraphSAGE(dataset.num_features, 
-                          256, 
-                          dataset.num_classes, 
-                          num_layers=3).to(device)
-    elif args.model == 'GAT':
-        raise NotImplementedError('GAT has not been implemented yet.')
-
-    # Initialize DistributedDataParallel
-    if device == torch.device('cpu'):
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=None, output_device=None)
-    else:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], output_device=device)
-    
-    data = dataset[0]
-    split_idx = dataset.get_idx_split()
-    train_idx = split_idx['train']
-
-    x = data.x.to(device)
-    y = data.y.squeeze().to(device)
-
-    optimizer = torch.optim.Adam(model.parameters())
-
-    # Conduct training
-    best_val_acc = 0
-    for epoch in range(20):
-        model.train()
-
-        pbar = tqdm(total=train_idx.size(0))
-        pbar.set_description(f'Epoch {epoch:02d}')
-
-        total_loss = total_correct = 0
-        for batch_size, n_id, adjs in train_loader:
-            # 'adjs' holds a list of '(edge_index, e_id, size)' tuples.
-            adjs = [adj.to(device) for adj in adjs]
-
-            optimizer.zero_grad()
-            out = model(x[n_id], adjs)
-            loss = F.nll_loss(out, y[n_id[:batch_size]])
-            loss.backward()
-            optimizer.step()
-
-            total_loss += float(loss)
-            total_correct += int(out.argmax(dim=-1).eq(y[n_id[:batch_size]]).sum())
-            pbar.update(batch_size)
-
-        pbar.close()
-
-        loss = total_loss / len(train_loader)
-        acc = total_correct / train_idx.size(0)
-        print(f'Epoch {epoch:02d}, Loss: {loss:.4f}, Training Accuracy: {acc:.4f}')
-        
-        if proc_id == 0:
-            with torch.no_grad():
-                model.eval()
-
-                out = model.module.inference(x, subgraph_loader, device)
-
-                y_true = y.cpu().unsqueeze(-1)
-                y_pred = out.argmax(dim=-1, keepdim=True)
-
-                val_acc = evaluator.eval({
-                    'y_true': y_true[split_idx['valid']],
-                    'y_pred': y_pred[split_idx['valid']],
-                })['acc']
-            print(f'Validation Accuracy: {val_acc:.4f}')
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-
-def main():
+def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='ogbn-products')
     parser.add_argument('--model', type=str, default='GraphSAGE')
-    parser.add_argument('--gpus', type=int, default=1)
-    args = parser.parse_args()
-
-    dataset, evaluator = download_dataset(args.dataset)
-    train_loader, subgraph_loader = create_samplers(dataset)
+    parser.add_argument('--gpus', type=int, default=4)
+    parser.add_argument('--eval', action=argparse.BooleanOptionalAction, default=False)
+    return parser.parse_args()
 
 
-    mp.spawn(run, args=(list(range(args.gpus)), args, dataset, evaluator, train_loader, subgraph_loader), nprocs=args.gpus)
+def download_dataset(dataset_name):
+    root = os.path.join(os.getcwd(), '../..', 'data', dataset_name)    # dataset storage location for now
+    print(root)
+    if dataset_name in ['ogbn-products', 'ogbn-papers100M']:
+        return PygNodePropPredDataset(dataset_name, root)
+    else:
+        raise NotImplementedError(f'Dataset {dataset_name} not supported.')
+
+
+def get_metrics_path():
+    timestamp = int(datetime.datetime.now().timestamp())
+    metrics_path = os.path.join('metrics', 'pyg', args.dataset, args.model, str(args.gpus))
+    Path(metrics_path).mkdir(parents=True, exist_ok=True)
+    return f'{metrics_path}/{timestamp}.csv'
+
+
+def run(rank, world_size, x, y, edge_index, split_idx, num_features, num_classes, eval, metrics_path):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+
+    torch.cuda.set_device(rank)
+    device = torch.device('cuda:' + str(rank))
+
+    dist.init_process_group('nccl', rank=rank, world_size=world_size)
+
+    train_idx, val_idx, test_idx = split_idx['train'], split_idx['valid'], split_idx['test']
+    train_idx = train_idx.split(train_idx.size(0) // world_size)[rank].to(device)
+
+    train_loader = NeighborSampler(edge_index, node_idx=train_idx,
+                                   sizes=[15, 10, 5], batch_size=1024,
+                                   shuffle=True, persistent_workers=True, 
+                                   num_workers=5)
+
+    if eval and rank == 0:
+        subgraph_loader = NeighborSampler(edge_index, node_idx=None,
+                                          sizes=[-1], batch_size=1024,
+                                          shuffle=False, num_workers=6)
+
+    torch.manual_seed(12345)
+    model = GraphSAGE(num_features, 256, num_classes, num_layers=3).to(device)
+    model = DistributedDataParallel(model, device_ids=[device])
+    optimizer = torch.optim.Adam(model.parameters())
+
+    x, y = x, y.to(device)
+
+    with open(metrics_path, 'a') as csv_file:
+        metrics_writer = csv.writer(csv_file, delimiter=',')
+        for epoch in range(1, 21):
+            model.train()
+            epoch_start = time.time()
+
+            for batch_size, n_id, adjs in train_loader:
+                adjs = [adj.to(device) for adj in adjs]
+
+                optimizer.zero_grad()
+                out = model(x[n_id].to(device), adjs)
+                loss = F.nll_loss(out, y[n_id[:batch_size]])
+                loss.backward()
+                optimizer.step()
+
+            epoch_time = time.time() - epoch_start
+            memory = torch.cuda.max_memory_allocated() / 1_000_000
+            print(f'Epoch: {epoch}, GPU {rank}: Loss {loss.item()}, GPU Memory: {memory} MB, Epoch Time: {epoch_time}')
+            metrics_writer.writerow([rank, epoch, epoch_time])
+            csv_file.flush()
+            dist.barrier()
+
+            # Evaluation on a single GPU
+            if eval and rank == 0 and epoch % 5 == 0:  
+                model.eval()
+                with torch.no_grad():
+                    out = model.module.inference(x, device, subgraph_loader)
+                res = out.argmax(dim=-1) == y.cpu()
+                train_acc = int(res[train_idx].sum()) / train_idx.numel()
+                val_acc = int(res[val_idx].sum()) / val_idx.numel()
+                test_acc = int(res[test_idx].sum()) / test_idx.numel()
+                print(f'Train: {train_acc:.4f}, Val: {val_acc:.4f}, Test: {test_acc:.4f}')
+
+            dist.barrier()
+    dist.destroy_process_group()
 
 
 if __name__ == '__main__':
-    main()
+    args = parse_arguments()
+    dataset = download_dataset(args.dataset)
+    data = dataset[0]
+    split_idx = dataset.get_idx_split()
+
+    world_size = args.gpus
+    metrics_path = get_metrics_path()
+
+    print('Let\'s use', world_size, 'GPUs!')
+    mp.spawn(
+        run,
+        args=(world_size, data.x, data.y.squeeze(), data.edge_index, split_idx, dataset.num_features, dataset.num_classes, args.eval, metrics_path),
+        nprocs=world_size,
+        join=True
+    )

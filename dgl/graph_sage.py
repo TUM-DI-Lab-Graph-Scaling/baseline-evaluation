@@ -21,11 +21,11 @@ class GraphSAGE(nn.Module):
             h = layer(block, h)
             if l != len(self.layers) - 1:
                 h = F.relu(h)
-        return h.log_softmax(dim=-1)
+        return h
 
     def inference(self, g, device, batch_size, num_workers, buffer_device=None):
         feat = g.ndata['feat']
-        sampler = dgl.dataloading.MultiLayerFullNeighborSampler(1, prefetch_node_feats=['feat'])
+        sampler = dgl.dataloading.MultiLayerFullNeighborSampler(3, prefetch_node_feats=['feat'])
         dataloader = dgl.dataloading.DataLoader(
             g, torch.arange(g.num_nodes()).to(g.device), sampler, device=device,
             batch_size=batch_size, shuffle=False, drop_last=False,
